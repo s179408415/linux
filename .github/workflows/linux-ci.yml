@@ -1,0 +1,30 @@
+name: build
+
+on:
+  push:
+    branches:
+      - master
+  release:
+    types: [published]
+#
+jobs:
+  build_linux:
+    name: build linux kernel
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          ref: master
+      - name: Space cleanup
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -y install flex bison autoconf pkg-config gcc make openssl libssl-dev libc6-dev texinfo build-essential libncurses5-dev libelf-dev build-essential binutils bzip2 gawk gettext flex bc
+      - name: configuration
+        run: |
+          make defconfig
+      
+      - name: build
+        run: |
+          make -j$(nproc) || make -j1 V=1
