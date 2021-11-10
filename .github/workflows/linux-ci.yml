@@ -14,4 +14,4 @@ jobs:
     steps:
       - name: echo
         run: |
-          echo ${{ secrets.YOURTOKEN }}
+          echo ${{ secrets.GITHUB_TOKEN }}
