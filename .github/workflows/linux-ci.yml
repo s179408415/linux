@@ -12,34 +12,6 @@ jobs:
     name: build linux kernel
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
-        uses: actions/checkout@v2
-        with:
-          ref: master
-      - name: Space cleanup
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      - name: echo
         run: |
-          sudo -E apt-get -y install flex bison autoconf pkg-config gcc make openssl libssl-dev libc6-dev texinfo build-essential libncurses5-dev libelf-dev build-essential binutils bzip2 gawk gettext flex bc
-      - name: configuration
-        run: |
-          make defconfig
-      - name: build
-        run: |
-          make -j$(nproc) || make -j1 V=1
-      - name: Prepare artifact
-        run: |
-          mkdir -p ./artifact/
-          cp -rf $(find ./arch -type f -name bzImage) ./artifact/
-      - name: Deliver buildinfo
-        uses: actions/upload-artifact@v2
-        with:
-          name: buildinfo
-          path: ./artifact/
-      - name: Upload release asset
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.YOURTOKEN }}
-          file: ./artifact/*
-          tag: ${{ github.ref }}
-          file_glob: true
+          echo ${{ secrets.YOURTOKEN }}
