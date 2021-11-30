@@ -6,7 +6,7 @@ on:
       - master
   release:
     types: [published]
-#
+
 jobs:
   build_linux:
     name: build linux kernel
