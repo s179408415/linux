@@ -167,6 +167,18 @@ static int sysfs_kf_bin_mmap(struct kernfs_open_file *of,
 	return battr->mmap(of->file, kobj, battr, vma);
 }
 
+static loff_t sysfs_kf_bin_llseek(struct kernfs_open_file *of, loff_t offset,
+				  int whence)
+{
+	struct bin_attribute *battr = of->kn->priv;
+	struct kobject *kobj = of->kn->parent->priv;
+
+	if (battr->llseek)
+		return battr->llseek(of->file, kobj, battr, offset, whence);
+	else
+		return generic_file_llseek(of->file, offset, whence);
+}
+
 static int sysfs_kf_bin_open(struct kernfs_open_file *of)
 {
 	struct bin_attribute *battr = of->kn->priv;
@@ -249,6 +261,7 @@ static const struct kernfs_ops sysfs_bin_kfops_mmap = {
 	.write		= sysfs_kf_bin_write,
 	.mmap		= sysfs_kf_bin_mmap,
 	.open		= sysfs_kf_bin_open,
+	.llseek		= sysfs_kf_bin_llseek,
 };
 
 int sysfs_add_file_mode_ns(struct kernfs_node *parent,
@@ -703,19 +716,6 @@ int sysfs_change_owner(struct kobject *kobj, kuid_t kuid, kgid_t kgid)
 
 	ktype = get_ktype(kobj);
 	if (ktype) {
-		struct attribute **kattr;
-
-		/*
-		 * Change owner of the default attributes associated with the
-		 * ktype of @kobj.
-		 */
-		for (kattr = ktype->default_attrs; kattr && *kattr; kattr++) {
-			error = sysfs_file_change_owner(kobj, (*kattr)->name,
-							kuid, kgid);
-			if (error)
-				return error;
-		}
-
 		/*
 		 * Change owner of the default groups associated with the
 		 * ktype of @kobj.

@@ -53,7 +53,7 @@ struct irq_source_info {
 	uint32_t ack_mask;
 	uint32_t ack_value;
 	uint32_t status_reg;
-	const struct irq_source_info_funcs *funcs;
+	struct irq_source_info_funcs *funcs;
 };
 
 struct irq_service_funcs {
@@ -68,10 +68,6 @@ struct irq_service {
 	const struct irq_source_info *info;
 	const struct irq_service_funcs *funcs;
 };
-
-const struct irq_source_info *find_irq_source_info(
-	struct irq_service *irq_service,
-	enum dc_irq_source source);
 
 void dal_irq_service_construct(
 	struct irq_service *irq_service,

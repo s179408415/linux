@@ -54,11 +54,15 @@ static int report_error_detected(struct pci_dev *dev,
 	const struct pci_error_handlers *err_handler;
 
 	device_lock(&dev->dev);
-	pdrv = to_pci_driver(dev->dev.driver);
-	if (!pci_dev_set_io_state(dev, state) ||
-		!pdrv ||
-		!pdrv->err_handler ||
-		!pdrv->err_handler->error_detected) {
+	pdrv = dev->driver;
+	if (pci_dev_is_disconnected(dev)) {
+		vote = PCI_ERS_RESULT_DISCONNECT;
+	} else if (!pci_dev_set_io_state(dev, state)) {
+		pci_info(dev, "can't recover (state transition %u -> %u invalid)\n",
+			dev->error_state, state);
+		vote = PCI_ERS_RESULT_NONE;
+	} else if (!pdrv || !pdrv->err_handler ||
+		   !pdrv->err_handler->error_detected) {
 		/*
 		 * If any device in the subtree does not have an error_detected
 		 * callback, PCI_ERS_RESULT_NO_AER_DRIVER prevents subsequent
@@ -98,7 +102,7 @@ static int report_mmio_enabled(struct pci_dev *dev, void *data)
 	const struct pci_error_handlers *err_handler;
 
 	device_lock(&dev->dev);
-	pdrv = to_pci_driver(dev->dev.driver);
+	pdrv = dev->driver;
 	if (!pdrv ||
 		!pdrv->err_handler ||
 		!pdrv->err_handler->mmio_enabled)
@@ -119,7 +123,7 @@ static int report_slot_reset(struct pci_dev *dev, void *data)
 	const struct pci_error_handlers *err_handler;
 
 	device_lock(&dev->dev);
-	pdrv = to_pci_driver(dev->dev.driver);
+	pdrv = dev->driver;
 	if (!pdrv ||
 		!pdrv->err_handler ||
 		!pdrv->err_handler->slot_reset)
@@ -139,7 +143,7 @@ static int report_resume(struct pci_dev *dev, void *data)
 	const struct pci_error_handlers *err_handler;
 
 	device_lock(&dev->dev);
-	pdrv = to_pci_driver(dev->dev.driver);
+	pdrv = dev->driver;
 	if (!pci_dev_set_io_state(dev, pci_channel_io_normal) ||
 		!pdrv ||
 		!pdrv->err_handler ||

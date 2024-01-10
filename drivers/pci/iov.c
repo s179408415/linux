@@ -14,7 +14,7 @@
 #include <linux/delay.h>
 #include "pci.h"
 
-#define VIRTFN_ID_LEN	16
+#define VIRTFN_ID_LEN	17	/* "virtfn%u\0" for 2^32 - 1 */
 
 int pci_iov_virtfn_bus(struct pci_dev *dev, int vf_id)
 {
@@ -32,6 +32,48 @@ int pci_iov_virtfn_devfn(struct pci_dev *dev, int vf_id)
 		dev->sriov->stride * vf_id) & 0xff;
 }
 EXPORT_SYMBOL_GPL(pci_iov_virtfn_devfn);
+
+int pci_iov_vf_id(struct pci_dev *dev)
+{
+	struct pci_dev *pf;
+
+	if (!dev->is_virtfn)
+		return -EINVAL;
+
+	pf = pci_physfn(dev);
+	return (pci_dev_id(dev) - (pci_dev_id(pf) + pf->sriov->offset)) /
+	       pf->sriov->stride;
+}
+EXPORT_SYMBOL_GPL(pci_iov_vf_id);
+
+/**
+ * pci_iov_get_pf_drvdata - Return the drvdata of a PF
+ * @dev: VF pci_dev
+ * @pf_driver: Device driver required to own the PF
+ *
+ * This must be called from a context that ensures that a VF driver is attached.
+ * The value returned is invalid once the VF driver completes its remove()
+ * callback.
+ *
+ * Locking is achieved by the driver core. A VF driver cannot be probed until
+ * pci_enable_sriov() is called and pci_disable_sriov() does not return until
+ * all VF drivers have completed their remove().
+ *
+ * The PF driver must call pci_disable_sriov() before it begins to destroy the
+ * drvdata.
+ */
+void *pci_iov_get_pf_drvdata(struct pci_dev *dev, struct pci_driver *pf_driver)
+{
+	struct pci_dev *pf_dev;
+
+	if (!dev->is_virtfn)
+		return ERR_PTR(-EINVAL);
+	pf_dev = dev->physfn;
+	if (pf_dev->driver != pf_driver)
+		return ERR_PTR(-EINVAL);
+	return pci_get_drvdata(pf_dev);
+}
+EXPORT_SYMBOL_GPL(pci_iov_get_pf_drvdata);
 
 /*
  * Per SR-IOV spec sec 3.3.10 and 3.3.11, First VF Offset and VF Stride may
@@ -164,15 +206,13 @@ static ssize_t sriov_vf_total_msix_show(struct device *dev,
 					char *buf)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
-	struct pci_driver *pdrv;
 	u32 vf_total_msix = 0;
 
 	device_lock(dev);
-	pdrv = to_pci_driver(dev->driver);
-	if (!pdrv || !pdrv->sriov_get_vf_total_msix)
+	if (!pdev->driver || !pdev->driver->sriov_get_vf_total_msix)
 		goto unlock;
 
-	vf_total_msix = pdrv->sriov_get_vf_total_msix(pdev);
+	vf_total_msix = pdev->driver->sriov_get_vf_total_msix(pdev);
 unlock:
 	device_unlock(dev);
 	return sysfs_emit(buf, "%u\n", vf_total_msix);
@@ -185,7 +225,6 @@ static ssize_t sriov_vf_msix_count_store(struct device *dev,
 {
 	struct pci_dev *vf_dev = to_pci_dev(dev);
 	struct pci_dev *pdev = pci_physfn(vf_dev);
-	struct pci_driver *pdrv;
 	int val, ret = 0;
 
 	if (kstrtoint(buf, 0, &val) < 0)
@@ -195,14 +234,13 @@ static ssize_t sriov_vf_msix_count_store(struct device *dev,
 		return -EINVAL;
 
 	device_lock(&pdev->dev);
-	pdrv = to_pci_driver(dev->driver);
-	if (!pdrv || !pdrv->sriov_set_msix_vec_count) {
+	if (!pdev->driver || !pdev->driver->sriov_set_msix_vec_count) {
 		ret = -EOPNOTSUPP;
 		goto err_pdev;
 	}
 
 	device_lock(&vf_dev->dev);
-	if (to_pci_driver(vf_dev->dev.driver)) {
+	if (vf_dev->driver) {
 		/*
 		 * A driver is already attached to this VF and has configured
 		 * itself based on the current MSI-X vector count. Changing
@@ -212,7 +250,7 @@ static ssize_t sriov_vf_msix_count_store(struct device *dev,
 		goto err_dev;
 	}
 
-	ret = pdrv->sriov_set_msix_vec_count(vf_dev, val);
+	ret = pdev->driver->sriov_set_msix_vec_count(vf_dev, val);
 
 err_dev:
 	device_unlock(&vf_dev->dev);
@@ -379,7 +417,6 @@ static ssize_t sriov_numvfs_store(struct device *dev,
 				  const char *buf, size_t count)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
-	struct pci_driver *pdrv;
 	int ret = 0;
 	u16 num_vfs;
 
@@ -395,15 +432,14 @@ static ssize_t sriov_numvfs_store(struct device *dev,
 		goto exit;
 
 	/* is PF driver loaded */
-	pdrv = to_pci_driver(dev->driver);
-	if (!pdrv) {
+	if (!pdev->driver) {
 		pci_info(pdev, "no driver bound to device; cannot configure SR-IOV\n");
 		ret = -ENOENT;
 		goto exit;
 	}
 
 	/* is PF driver loaded w/callback */
-	if (!pdrv->sriov_configure) {
+	if (!pdev->driver->sriov_configure) {
 		pci_info(pdev, "driver does not support SR-IOV configuration via sysfs\n");
 		ret = -ENOENT;
 		goto exit;
@@ -411,7 +447,7 @@ static ssize_t sriov_numvfs_store(struct device *dev,
 
 	if (num_vfs == 0) {
 		/* disable VFs */
-		ret = pdrv->sriov_configure(pdev, 0);
+		ret = pdev->driver->sriov_configure(pdev, 0);
 		goto exit;
 	}
 
@@ -423,7 +459,7 @@ static ssize_t sriov_numvfs_store(struct device *dev,
 		goto exit;
 	}
 
-	ret = pdrv->sriov_configure(pdev, num_vfs);
+	ret = pdev->driver->sriov_configure(pdev, num_vfs);
 	if (ret < 0)
 		goto exit;
 

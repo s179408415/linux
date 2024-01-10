@@ -304,24 +304,23 @@ static void pdr_indication_cb(struct qmi_handle *qmi,
 					      notifier_hdl);
 	const struct servreg_state_updated_ind *ind_msg = data;
 	struct pdr_list_node *ind;
-	struct pdr_service *pds;
-	bool found = false;
+	struct pdr_service *pds = NULL, *iter;
 
 	if (!ind_msg || !ind_msg->service_path[0] ||
 	    strlen(ind_msg->service_path) > SERVREG_NAME_LENGTH)
 		return;
 
 	mutex_lock(&pdr->list_lock);
-	list_for_each_entry(pds, &pdr->lookups, node) {
-		if (strcmp(pds->service_path, ind_msg->service_path))
+	list_for_each_entry(iter, &pdr->lookups, node) {
+		if (strcmp(iter->service_path, ind_msg->service_path))
 			continue;
 
-		found = true;
+		pds = iter;
 		break;
 	}
 	mutex_unlock(&pdr->list_lock);
 
-	if (!found)
+	if (!pds)
 		return;
 
 	pr_info("PDR: Indication received from %s, state: 0x%x, trans-id: %d\n",
@@ -555,7 +554,7 @@ err:
 	kfree(pds);
 	return ERR_PTR(ret);
 }
-EXPORT_SYMBOL(pdr_add_lookup);
+EXPORT_SYMBOL_GPL(pdr_add_lookup);
 
 /**
  * pdr_restart_pd() - restart PD
@@ -635,7 +634,7 @@ int pdr_restart_pd(struct pdr_handle *pdr, struct pdr_service *pds)
 
 	return 0;
 }
-EXPORT_SYMBOL(pdr_restart_pd);
+EXPORT_SYMBOL_GPL(pdr_restart_pd);
 
 /**
  * pdr_handle_alloc() - initialize the PDR client handle
@@ -716,7 +715,7 @@ free_pdr_handle:
 
 	return ERR_PTR(ret);
 }
-EXPORT_SYMBOL(pdr_handle_alloc);
+EXPORT_SYMBOL_GPL(pdr_handle_alloc);
 
 /**
  * pdr_handle_release() - release the PDR client handle
@@ -750,7 +749,7 @@ void pdr_handle_release(struct pdr_handle *pdr)
 
 	kfree(pdr);
 }
-EXPORT_SYMBOL(pdr_handle_release);
+EXPORT_SYMBOL_GPL(pdr_handle_release);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Qualcomm Protection Domain Restart helpers");

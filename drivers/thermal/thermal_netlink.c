@@ -13,9 +13,14 @@
 
 #include "thermal_core.h"
 
+enum thermal_genl_multicast_groups {
+	THERMAL_GENL_SAMPLING_GROUP = 0,
+	THERMAL_GENL_EVENT_GROUP = 1,
+};
+
 static const struct genl_multicast_group thermal_genl_mcgrps[] = {
-	{ .name = THERMAL_GENL_SAMPLING_GROUP_NAME, },
-	{ .name = THERMAL_GENL_EVENT_GROUP_NAME,  },
+	[THERMAL_GENL_SAMPLING_GROUP] = { .name = THERMAL_GENL_SAMPLING_GROUP_NAME, },
+	[THERMAL_GENL_EVENT_GROUP]  = { .name = THERMAL_GENL_EVENT_GROUP_NAME,  },
 };
 
 static const struct nla_policy thermal_genl_policy[THERMAL_GENL_ATTR_MAX + 1] = {
@@ -43,6 +48,11 @@ static const struct nla_policy thermal_genl_policy[THERMAL_GENL_ATTR_MAX + 1] = 
 	[THERMAL_GENL_ATTR_CDEV_MAX_STATE]	= { .type = NLA_U32 },
 	[THERMAL_GENL_ATTR_CDEV_NAME]		= { .type = NLA_STRING,
 						    .len = THERMAL_NAME_LENGTH },
+	/* CPU capabilities */
+	[THERMAL_GENL_ATTR_CPU_CAPABILITY]		= { .type = NLA_NESTED },
+	[THERMAL_GENL_ATTR_CPU_CAPABILITY_ID]		= { .type = NLA_U32 },
+	[THERMAL_GENL_ATTR_CPU_CAPABILITY_PERFORMANCE]	= { .type = NLA_U32 },
+	[THERMAL_GENL_ATTR_CPU_CAPABILITY_EFFICIENCY]	= { .type = NLA_U32 },
 };
 
 struct param {
@@ -58,11 +68,18 @@ struct param {
 	int temp;
 	int cdev_state;
 	int cdev_max_state;
+	struct thermal_genl_cpu_caps *cpu_capabilities;
+	int cpu_capabilities_count;
 };
 
 typedef int (*cb_t)(struct param *);
 
 static struct genl_family thermal_gnl_family;
+
+static int thermal_group_has_listeners(enum thermal_genl_multicast_groups group)
+{
+	return genl_has_listeners(&thermal_gnl_family, &init_net, group);
+}
 
 /************************** Sampling encoding *******************************/
 
@@ -70,6 +87,9 @@ int thermal_genl_sampling_temp(int id, int temp)
 {
 	struct sk_buff *skb;
 	void *hdr;
+
+	if (!thermal_group_has_listeners(THERMAL_GENL_SAMPLING_GROUP))
+		return 0;
 
 	skb = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (!skb)
@@ -88,7 +108,7 @@ int thermal_genl_sampling_temp(int id, int temp)
 
 	genlmsg_end(skb, hdr);
 
-	genlmsg_multicast(&thermal_gnl_family, skb, 0, 0, GFP_KERNEL);
+	genlmsg_multicast(&thermal_gnl_family, skb, 0, THERMAL_GENL_SAMPLING_GROUP, GFP_KERNEL);
 
 	return 0;
 out_cancel:
@@ -190,6 +210,42 @@ static int thermal_genl_event_gov_change(struct param *p)
 	return 0;
 }
 
+static int thermal_genl_event_cpu_capability_change(struct param *p)
+{
+	struct thermal_genl_cpu_caps *cpu_cap = p->cpu_capabilities;
+	struct sk_buff *msg = p->msg;
+	struct nlattr *start_cap;
+	int i;
+
+	start_cap = nla_nest_start(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY);
+	if (!start_cap)
+		return -EMSGSIZE;
+
+	for (i = 0; i < p->cpu_capabilities_count; ++i) {
+		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY_ID,
+				cpu_cap->cpu))
+			goto out_cancel_nest;
+
+		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY_PERFORMANCE,
+				cpu_cap->performance))
+			goto out_cancel_nest;
+
+		if (nla_put_u32(msg, THERMAL_GENL_ATTR_CPU_CAPABILITY_EFFICIENCY,
+				cpu_cap->efficiency))
+			goto out_cancel_nest;
+
+		++cpu_cap;
+	}
+
+	nla_nest_end(msg, start_cap);
+
+	return 0;
+out_cancel_nest:
+	nla_nest_cancel(msg, start_cap);
+
+	return -EMSGSIZE;
+}
+
 int thermal_genl_event_tz_delete(struct param *p)
 	__attribute__((alias("thermal_genl_event_tz")));
 
@@ -219,6 +275,7 @@ static cb_t event_cb[] = {
 	[THERMAL_GENL_EVENT_CDEV_DELETE]	= thermal_genl_event_cdev_delete,
 	[THERMAL_GENL_EVENT_CDEV_STATE_UPDATE]	= thermal_genl_event_cdev_state_update,
 	[THERMAL_GENL_EVENT_TZ_GOV_CHANGE]	= thermal_genl_event_gov_change,
+	[THERMAL_GENL_EVENT_CPU_CAPABILITY_CHANGE] = thermal_genl_event_cpu_capability_change,
 };
 
 /*
@@ -230,6 +287,9 @@ static int thermal_genl_send_event(enum thermal_genl_event event,
 	struct sk_buff *msg;
 	int ret = -EMSGSIZE;
 	void *hdr;
+
+	if (!thermal_group_has_listeners(THERMAL_GENL_EVENT_GROUP))
+		return 0;
 
 	msg = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (!msg)
@@ -246,7 +306,7 @@ static int thermal_genl_send_event(enum thermal_genl_event event,
 
 	genlmsg_end(msg, hdr);
 
-	genlmsg_multicast(&thermal_gnl_family, msg, 0, 1, GFP_KERNEL);
+	genlmsg_multicast(&thermal_gnl_family, msg, 0, THERMAL_GENL_EVENT_GROUP, GFP_KERNEL);
 
 	return 0;
 
@@ -356,6 +416,15 @@ int thermal_notify_tz_gov_change(int tz_id, const char *name)
 	return thermal_genl_send_event(THERMAL_GENL_EVENT_TZ_GOV_CHANGE, &p);
 }
 
+int thermal_genl_cpu_capability_event(int count,
+				      struct thermal_genl_cpu_caps *caps)
+{
+	struct param p = { .cpu_capabilities_count = count, .cpu_capabilities = caps };
+
+	return thermal_genl_send_event(THERMAL_GENL_EVENT_CPU_CAPABILITY_CHANGE, &p);
+}
+EXPORT_SYMBOL_GPL(thermal_genl_cpu_capability_event);
+
 /*************************** Command encoding ********************************/
 
 static int __thermal_genl_cmd_tz_get_id(struct thermal_zone_device *tz,
@@ -397,9 +466,10 @@ out_cancel_nest:
 static int thermal_genl_cmd_tz_get_trip(struct param *p)
 {
 	struct sk_buff *msg = p->msg;
+	const struct thermal_trip *trip;
 	struct thermal_zone_device *tz;
 	struct nlattr *start_trip;
-	int i, id;
+	int id;
 
 	if (!p->attrs[THERMAL_GENL_ATTR_TZ_ID])
 		return -EINVAL;
@@ -416,19 +486,12 @@ static int thermal_genl_cmd_tz_get_trip(struct param *p)
 
 	mutex_lock(&tz->lock);
 
-	for (i = 0; i < tz->trips; i++) {
-
-		enum thermal_trip_type type;
-		int temp, hyst;
-
-		tz->ops->get_trip_type(tz, i, &type);
-		tz->ops->get_trip_temp(tz, i, &temp);
-		tz->ops->get_trip_hyst(tz, i, &hyst);
-
-		if (nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_ID, i) ||
-		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TYPE, type) ||
-		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TEMP, temp) ||
-		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_HYST, hyst))
+	for_each_trip(tz, trip) {
+		if (nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_ID,
+				thermal_zone_trip_id(tz, trip)) ||
+		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TYPE, trip->type) ||
+		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_TEMP, trip->temperature) ||
+		    nla_put_u32(msg, THERMAL_GENL_ATTR_TZ_TRIP_HYST, trip->hysteresis))
 			goto out_cancel_nest;
 	}
 
@@ -639,6 +702,7 @@ static struct genl_family thermal_gnl_family __ro_after_init = {
 	.policy		= thermal_genl_policy,
 	.small_ops	= thermal_genl_ops,
 	.n_small_ops	= ARRAY_SIZE(thermal_genl_ops),
+	.resv_start_op	= THERMAL_GENL_CMD_CDEV_GET + 1,
 	.mcgrps		= thermal_genl_mcgrps,
 	.n_mcgrps	= ARRAY_SIZE(thermal_genl_mcgrps),
 };
@@ -646,4 +710,9 @@ static struct genl_family thermal_gnl_family __ro_after_init = {
 int __init thermal_netlink_init(void)
 {
 	return genl_register_family(&thermal_gnl_family);
+}
+
+void __init thermal_netlink_exit(void)
+{
+	genl_unregister_family(&thermal_gnl_family);
 }

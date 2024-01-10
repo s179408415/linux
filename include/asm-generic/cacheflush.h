@@ -2,6 +2,8 @@
 #ifndef _ASM_GENERIC_CACHEFLUSH_H
 #define _ASM_GENERIC_CACHEFLUSH_H
 
+#include <linux/instrumented.h>
+
 struct mm_struct;
 struct vm_area_struct;
 struct page;
@@ -50,13 +52,7 @@ static inline void flush_dcache_page(struct page *page)
 {
 }
 
-static inline void flush_dcache_folio(struct folio *folio) { }
 #define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE 0
-#define ARCH_IMPLEMENTS_FLUSH_DCACHE_FOLIO
-#endif
-
-#ifndef ARCH_IMPLEMENTS_FLUSH_DCACHE_FOLIO
-void flush_dcache_folio(struct folio *folio);
 #endif
 
 #ifndef flush_dcache_mmap_lock
@@ -79,13 +75,6 @@ static inline void flush_icache_range(unsigned long start, unsigned long end)
 
 #ifndef flush_icache_user_range
 #define flush_icache_user_range flush_icache_range
-#endif
-
-#ifndef flush_icache_page
-static inline void flush_icache_page(struct vm_area_struct *vma,
-				     struct page *page)
-{
-}
 #endif
 
 #ifndef flush_icache_user_page
@@ -111,14 +100,22 @@ static inline void flush_cache_vunmap(unsigned long start, unsigned long end)
 #ifndef copy_to_user_page
 #define copy_to_user_page(vma, page, vaddr, dst, src, len)	\
 	do { \
+		instrument_copy_to_user((void __user *)dst, src, len); \
 		memcpy(dst, src, len); \
 		flush_icache_user_page(vma, page, vaddr, len); \
 	} while (0)
 #endif
 
+
 #ifndef copy_from_user_page
-#define copy_from_user_page(vma, page, vaddr, dst, src, len) \
-	memcpy(dst, src, len)
+#define copy_from_user_page(vma, page, vaddr, dst, src, len)		  \
+	do {								  \
+		instrument_copy_from_user_before(dst, (void __user *)src, \
+						 len);			  \
+		memcpy(dst, src, len);					  \
+		instrument_copy_from_user_after(dst, (void __user *)src, len, \
+						0);			  \
+	} while (0)
 #endif
 
 #endif /* _ASM_GENERIC_CACHEFLUSH_H */

@@ -32,14 +32,12 @@ enum rt5682s_dai_clks {
 };
 
 struct rt5682s_platform_data {
-
-	int ldo1_en; /* GPIO for LDO1_EN */
-
 	enum rt5682s_dmic1_data_pin dmic1_data_pin;
 	enum rt5682s_dmic1_clk_pin dmic1_clk_pin;
 	enum rt5682s_jd_src jd_src;
 	unsigned int dmic_clk_rate;
 	unsigned int dmic_delay;
+	unsigned int amic_delay;
 	bool dmic_clk_driving_high;
 
 	const char *dai_clk_names[RT5682S_DAI_NUM_CLKS];
